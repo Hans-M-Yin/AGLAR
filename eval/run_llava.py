@@ -73,20 +73,22 @@ def eval_model(args):
         if args.use_agla:
             tensor_image = loader(raw_image.resize((384,384)))
             image = vis_processors["eval"](raw_image).unsqueeze(0).to(device)
-            print(image.shape, " #### ")
+            # print(image.shape, " #### ")
             question = text_processors["eval"](question)
             tokenized_text = model_itm.tokenizer(question, padding='longest', truncation=True, return_tensors="pt").to('cuda')
             # print(type(model))
             # print(type(model.model.vision_tower))
-            augment_time = time.time()
+            # augment_time = time.time()
             augmented_image = augmentation(image, question, tensor_image, model_itm, tokenized_text, raw_image,
                                            model.model.vision_tower.vision_tower,
                                            model.model.vision_tower.image_processor,
+                                           blocks=[6],
+                                           weights=[1.0],
                                            # save_base_dir="./augmented_images",
                                            # sample_id=idx,
                                            # problem=question
                                            )
-            augment_time2 = time.time()
+            # augment_time2 = time.time()
 
             # print(len(model_itm.text_encoder.base_model.base_model.encoder.layer))
             # layer_results = multi_layer_augmentation(
@@ -112,7 +114,7 @@ def eval_model(args):
         stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
         keywords = [stop_str]
         stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
-        time3 = time.time()
+        # time3 = time.time()
         with torch.inference_mode():
             output_ids = model.generate(
                 input_ids,
@@ -120,14 +122,16 @@ def eval_model(args):
                 images_cd=(image_tensor.unsqueeze(0).half().cuda() if image_tensor is not None else None),
                 cd_alpha = args.alpha,
                 cd_beta = args.beta,
+                use_entropy=args.use_entropy,
+                use_max_probability=args.use_max_probability,
                 do_sample=True,
                 temperature=args.temperature,
                 top_p=args.top_p,
                 top_k=args.top_k,
                 max_new_tokens=1024,
                 use_cache=True)
-        time4 = time.time()
-        print(f"完毕。预处理时间：{augment_time2 - augment_time} | 模型生成时间： {time4 - time3}")
+        # time4 = time.time()
+        # print(f"完毕。预处理时间：{augment_time2 - augment_time} | 模型生成时间： {time4 - time3}")
         input_token_len = input_ids.shape[1]
         n_diff_input_output = (input_ids != output_ids[:, :input_token_len]).sum().item()
         if n_diff_input_output > 0:
@@ -150,9 +154,9 @@ def eval_model(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-path", type=str, default="/home/yzh/cs285/AGLA/llava-v1.5-7b")
+    parser.add_argument("--model-path", type=str, default="/root/.cache/modelscope/hub/models/huangjianuo/llava-v1.5-7b")
     parser.add_argument("--model-base", type=str, default=None)
-    parser.add_argument("--image-folder", type=str, default="/home/yzh/cs285/AGLA/pope_source/val2014")
+    parser.add_argument("--image-folder", type=str, default="/root/autodl-tmp/val2014")
     parser.add_argument("--question-file", type=str, default="/home/yzh/cs285/AGLA/data/POPE/coco/coco_pope_adversarial.json")
     parser.add_argument("--answers-file", type=str, default="/home/yzh/cs285/AGLA/eval/output/test.jsonl")
     parser.add_argument("--conv-mode", type=str, default="llava_v1")
@@ -162,9 +166,12 @@ if __name__ == "__main__":
     parser.add_argument("--top_p", type=float, default=1)
     parser.add_argument("--top_k", type=int, default=None)
     parser.add_argument("--use_agla", action='store_true', default=True)
+    parser.add_argument("--use-entropy", action='store_true', default=False)
+    parser.add_argument("--use-max-probability", action='store_true', default=False)
     parser.add_argument("--alpha", type=float, default=2.0)
     parser.add_argument("--beta", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=0)
+    # parser.add_argument("")
     args = parser.parse_args()
     set_seed(args.seed)
     eval_model(args)

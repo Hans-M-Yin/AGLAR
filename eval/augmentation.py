@@ -36,16 +36,27 @@ def adjust_weights_by_similarity(patch_features, patch_weights, temperature=0.1)
 
     return adjusted_weights
 
-def augmentation(image, question, tensor_image, model, tokenized_text, raw_image, vision_encoder, vision_processor,
-                 save_base_dir=None, sample_id=None, problem=None):
-    start_time = time.time()
+def augmentation(image, question, tensor_image, model, tokenized_text, raw_image, vision_encoder, vision_processor, blocks,
+                 weights=None, save_base_dir=None, sample_id=None, problem=None):
+    # start_time = time.time()
+    if weights is None:
+        weights = [1.0 / len(blocks)] * len(blocks)
+    weight_sum = sum(weights)
+    weights = [w / weight_sum for w in weights]
+
+    gradcams = None
     with torch.set_grad_enabled(True):
-        gradcams, _ = compute_gradcam(model=model,
-                                      visual_input=image,
-                                      text_input=question,
-                                      tokenized_text=tokenized_text,
-                                      block_num=6)
-    start_time2 = time.time()
+        for block_num, weight in zip(blocks, weights):
+            single_gradcams, _ = compute_gradcam(model=model,
+                                        visual_input=image,
+                                        text_input=question,
+                                        tokenized_text=tokenized_text,
+                                        block_num=block_num)
+            if gradcams is None:
+                gradcams = [weight * gradcam_ for gradcam_ in single_gradcams]
+            else:
+                gradcams = [g1 + weight * g2 for g1, g2 in zip(gradcams, single_gradcams)]
+    # start_time2 = time.time()
 
     with torch.no_grad():
         inputs = vision_processor(raw_image, return_tensors="pt").to(dtype=torch.float16)
@@ -54,19 +65,19 @@ def augmentation(image, question, tensor_image, model, tokenized_text, raw_image
         original_features = remove_cls_token(original_features).squeeze()
     gradcams = [gradcam_[1] for gradcam_ in gradcams]
     gradcams1 = torch.stack(gradcams).reshape(image.size(0), -1)
-    end_time = time.time()
+    # end_time = time.time()
 
     itc_score = model({"image": image, "text_input": question}, match_head='itc')
-    third_time = time.time()
-    print(f"执行时间:| GradCAM: {start_time2 - start_time:.6f} 秒 | vision encoder: {(end_time - start_time2):.6f} 秒 | itc compare: {third_time - end_time:.6f} 秒")
+    # third_time = time.time()
+    # print(f"执行时间:| GradCAM: {start_time2 - start_time:.6f} 秒 | vision encoder: {(end_time - start_time2):.6f} 秒 | itc compare: {third_time - end_time:.6f} 秒")
     ratio = 1 - itc_score / 2
     ratio = min(ratio, 1 - 10 ** (-5))
     resized_img = raw_image.resize((384, 384))
     norm_img = np.float32(resized_img) / 255
-    # gradcams2 = adjust_weights_by_similarity(original_features.to(device=gradcams1.device,dtype=torch.float32), gradcams1)
+    # gradcams1 = adjust_weights_by_similarity(original_features.to(device=gradcams1.device,dtype=torch.float32), gradcams1)
     gradcam = gradcams1.reshape(24, 24)
-    avg_gradcam = getAttMap(norm_img, gradcam.cpu().numpy(), blur=True, overlap=False)
     gradcam = adjust_weights_by_similarity(original_features.to(device=gradcam.device,dtype=torch.float32), gradcam.flatten()).reshape(24,24)
+    avg_gradcam = getAttMap(norm_img, gradcam.cpu().numpy(), blur=True, overlap=False)
 
     temp, _ = torch.sort(torch.tensor(avg_gradcam).reshape(-1), descending=True)
     cam1 = torch.tensor(avg_gradcam).unsqueeze(2)

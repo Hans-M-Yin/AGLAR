@@ -137,13 +137,44 @@ def sample(
             )
             next_token_logits_cd = outputs_cd.logits[:, -1, :]
             
-
+            use_entropy = model_kwargs.get("use_entropy", False)
+            use_max_probablity = model_kwargs.get("use_max_probablity", False)
+            assert not (use_entropy and use_max_probablity), "不能同时使用熵和最大概率"
             cd_alpha = model_kwargs.get("cd_alpha") if model_kwargs.get("cd_alpha") is not None else 1
+            if use_entropy:
+                # 计算两个分布的熵
+                probs_orig = torch.softmax(next_token_logits, dim=-1)
+                probs_cd = torch.softmax(next_token_logits_cd, dim=-1)
+                
+                # 防止log(0)
+                eps = 1e-6
+                log_probs_orig = torch.log(probs_orig + eps)
+                log_probs_cd = torch.log(probs_cd + eps)
+                
+                # 计算熵 H = -Σ p * log(p)
+                H_orig = -torch.sum(probs_orig * log_probs_orig, dim=-1, keepdim=True)
+                H_cd = -torch.sum(probs_cd * log_probs_cd, dim=-1, keepdim=True)
+                
+                # 计算置信度（确定性）
+                confidence_orig = torch.exp(-H_orig)
+                confidence_cd = torch.exp(-H_cd)
+
+                # print(f"原来的置信度: {confidence_orig.item():.4f}, CD的置信度: {confidence_cd.item():.4f}")
+                
+                # cd_alpha *= max(min(confidence_cd / confidence_orig, 1.2), 0.8)
+                cd_alpha *= confidence_cd / confidence_orig
+
+            if use_max_probablity:
+                probs_orig = torch.softmax(next_token_logits, dim=-1)
+                probs_cd = torch.softmax(next_token_logits_cd, dim=-1)
+                cd_alpha *= torch.max(probs_cd) / torch.max(probs_orig)
+
+            # print(cd_alpha)
+            diffs = (next_token_logits + cd_alpha * next_token_logits_cd)
+
             cd_beta = model_kwargs.get("cd_beta") if model_kwargs.get("cd_beta") is not None else 0.5
 
             cutoff = torch.log(torch.tensor(cd_beta)) + next_token_logits.max(dim=-1, keepdim=True).values
-
-            diffs = (next_token_logits + cd_alpha * next_token_logits_cd)
 
             cd_logits = diffs.masked_fill(next_token_logits < cutoff, -float("inf"))
 
